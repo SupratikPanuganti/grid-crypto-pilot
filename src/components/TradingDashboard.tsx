@@ -1,407 +1,383 @@
-import React, { useState } from 'react';
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { 
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow 
+} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Calculator, TrendingUp, TrendingDown, DollarSign, Target, BarChart3 } from "lucide-react";
+import { Loader2, Download, Send, BarChart3 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import * as XLSX from 'xlsx';
 
-interface MarketData {
-  symbol: string;
-  contractExpiry: string;
-  currentPrice: number;
-  vwap: number;
-  atr: number;
-  rsi: number;
-  volumeTrend: string;
-}
-
-interface UserSettings {
-  cashAvailable: number;
-  targetPnL: number;
-  maxLeverage: number;
-  contractSize: number;
-  riskPreference: string;
-  marginConstraint: number;
-}
-
-interface TradeGrid {
+interface RecommendationResult {
+  coin: string;
   strategy: string;
-  entryPrice: number;
-  takeProfit: number;
-  stopLoss: number;
+  entry_price: number;
+  target_price: number;
+  stop_loss: number;
   contracts: number;
-  maxProfit: number;
-  maxLoss: number;
-  marginRequired: number;
-  leverage: number;
-  notionalValue: number;
+  max_profit: number;
+  max_loss: number;
+  margin_required: number;
+  confidence: string;
+  reason: string;
 }
 
-const TradingDashboard: React.FC = () => {
-  const [marketData, setMarketData] = useState<MarketData>({
-    symbol: 'BTC',
-    contractExpiry: '25 JUL',
-    currentPrice: 45000,
-    vwap: 44950,
-    atr: 1200,
-    rsi: 55,
-    volumeTrend: 'increasing'
-  });
+const TradingDashboard = () => {
+  const { toast } = useToast();
+  const [coinData, setCoinData] = useState("");
+  const [customPrompt, setCustomPrompt] = useState(
+    "Recommend the best trade among these coins, taking into account current volume vs last 12h, open interest, expiry, contract size, and recent price trends. Target profit: $500."
+  );
+  const [isLoading, setIsLoading] = useState(false);
+  const [results, setResults] = useState<RecommendationResult[]>([]);
+  const [sortColumn, setSortColumn] = useState<keyof RecommendationResult | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
-  const [userSettings, setUserSettings] = useState<UserSettings>({
-    cashAvailable: 100000,
-    targetPnL: 300,
-    maxLeverage: 6,
-    contractSize: 1,
-    riskPreference: 'balanced',
-    marginConstraint: 20
-  });
+  const handleSubmit = async () => {
+    if (!coinData.trim()) {
+      toast({
+        title: "Error",
+        description: "Please paste coin data before submitting.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-  const [tradeGrids, setTradeGrids] = useState<TradeGrid[]>([]);
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/recommend', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          coin_data: coinData,
+          prompt: customPrompt,
+        }),
+      });
 
-  const calculateTradeGrids = () => {
-    const { currentPrice, vwap, atr } = marketData;
-    const { targetPnL, maxLeverage, contractSize, marginConstraint, cashAvailable } = userSettings;
-
-    // Calculate entry zones using VWAP ± ATR methodology
-    const atrMultiplier = 0.175; // 0.15-0.2 range as specified
-    const entryLong = vwap - (atrMultiplier * atr);
-    const entryShort = vwap + (atrMultiplier * atr);
-
-    // Calculate TP/SL levels based on target profit
-    const calculateContracts = (entry: number, tp: number): number => {
-      const priceMove = Math.abs(tp - entry);
-      return Math.ceil(targetPnL / (priceMove * contractSize));
-    };
-
-    // Long position calculation
-    const longTP = entryLong + (targetPnL / (10 * contractSize)); // Simplified calculation
-    const longSL = entryLong - (atr * 0.4); // Risk-based SL
-    const longContracts = calculateContracts(entryLong, longTP);
-    const longNotional = entryLong * longContracts * contractSize;
-    const longLeverage = Math.min(longNotional / (cashAvailable * (marginConstraint / 100)), maxLeverage);
-    const longMargin = longNotional / longLeverage;
-
-    // Short position calculation
-    const shortTP = entryShort - (targetPnL / (10 * contractSize));
-    const shortSL = entryShort + (atr * 0.4);
-    const shortContracts = calculateContracts(entryShort, shortTP);
-    const shortNotional = entryShort * shortContracts * contractSize;
-    const shortLeverage = Math.min(shortNotional / (cashAvailable * (marginConstraint / 100)), maxLeverage);
-    const shortMargin = shortNotional / shortLeverage;
-
-    const newGrids: TradeGrid[] = [
-      {
-        strategy: 'C1-L',
-        entryPrice: entryLong,
-        takeProfit: longTP,
-        stopLoss: longSL,
-        contracts: longContracts,
-        maxProfit: targetPnL,
-        maxLoss: (entryLong - longSL) * longContracts * contractSize,
-        marginRequired: longMargin,
-        leverage: longLeverage,
-        notionalValue: longNotional
-      },
-      {
-        strategy: 'C1-S',
-        entryPrice: entryShort,
-        takeProfit: shortTP,
-        stopLoss: shortSL,
-        contracts: shortContracts,
-        maxProfit: targetPnL,
-        maxLoss: (shortSL - entryShort) * shortContracts * contractSize,
-        marginRequired: shortMargin,
-        leverage: shortLeverage,
-        notionalValue: shortNotional
+      if (!response.ok) {
+        throw new Error('Failed to get recommendations');
       }
-    ];
 
-    setTradeGrids(newGrids);
+      const data = await response.json();
+      setResults(data.recommendations || []);
+      toast({
+        title: "Success",
+        description: "Trade recommendations generated successfully.",
+      });
+    } catch (error) {
+      // Mock data for demonstration since API endpoint doesn't exist
+      const mockResults: RecommendationResult[] = [
+        {
+          coin: "BTC",
+          strategy: "C1-L",
+          entry_price: 67000,
+          target_price: 68500,
+          stop_loss: 65500,
+          contracts: 5,
+          max_profit: 7500,
+          max_loss: 7500,
+          margin_required: 67000,
+          confidence: "High",
+          reason: "Strong volume increase, above VWAP"
+        },
+        {
+          coin: "ETH",
+          strategy: "C1-S",
+          entry_price: 3450,
+          target_price: 3300,
+          stop_loss: 3600,
+          contracts: 15,
+          max_profit: 2250,
+          max_loss: 2250,
+          margin_required: 10350,
+          confidence: "Medium",
+          reason: "Resistance at current level"
+        }
+      ];
+      setResults(mockResults);
+      toast({
+        title: "Demo Mode",
+        description: "Showing mock data since API endpoint is not available.",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSort = (column: keyof RecommendationResult) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
+
+  const sortedResults = [...results].sort((a, b) => {
+    if (!sortColumn) return 0;
+    
+    const aVal = a[sortColumn];
+    const bVal = b[sortColumn];
+    
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+    }
+    
+    const aStr = String(aVal).toLowerCase();
+    const bStr = String(bVal).toLowerCase();
+    
+    if (sortDirection === 'asc') {
+      return aStr < bStr ? -1 : aStr > bStr ? 1 : 0;
+    } else {
+      return aStr > bStr ? -1 : aStr < bStr ? 1 : 0;
+    }
+  });
+
+  const exportToExcel = () => {
+    if (results.length === 0) {
+      toast({
+        title: "No Data",
+        description: "No recommendations to export.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(results);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Trade Recommendations");
+    
+    const fileName = `trade_recommendations_${new Date().toISOString().split('T')[0]}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
+    
+    toast({
+      title: "Export Complete",
+      description: `Downloaded ${fileName}`,
+    });
+  };
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(value);
   };
 
   return (
-    <div className="min-h-screen bg-background p-6">
+    <div className="min-h-screen bg-gradient-to-br from-background to-secondary/20 p-4">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">
           <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
-            Crypto Futures Grid Trading System
+            Crypto Futures Trading Recommendations
           </h1>
           <p className="text-muted-foreground text-lg">
-            Systematic grid-based trading with VWAP, ATR, and profit optimization
+            AI-powered trading analysis for optimal futures strategies
           </p>
         </div>
 
+        {/* Main Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Market Data Input */}
-          <Card className="border-border/50 shadow-lg">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <BarChart3 className="h-5 w-5 text-primary" />
-                Market Data
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="symbol">Symbol</Label>
-                  <Select value={marketData.symbol} onValueChange={(value) => 
-                    setMarketData(prev => ({ ...prev, symbol: value }))
-                  }>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="BTC">BTC</SelectItem>
-                      <SelectItem value="ETH">ETH</SelectItem>
-                      <SelectItem value="XRP">XRP</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="expiry">Contract Expiry</Label>
-                  <Input
-                    id="expiry"
-                    value={marketData.contractExpiry}
-                    onChange={(e) => setMarketData(prev => ({ ...prev, contractExpiry: e.target.value }))}
-                    placeholder="25 JUL"
+          {/* Left Column - Inputs */}
+          <div className="space-y-6">
+            {/* Coin Data Input */}
+            <Card className="bg-card/50 backdrop-blur-sm border-primary/20">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Send className="h-5 w-5 text-primary" />
+                  Coin Data Input
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="coinData">Paste coin metrics here</Label>
+                  <Textarea
+                    id="coinData"
+                    placeholder="Paste coin metrics here (e.g. Last Price, Open Interest, Vol, Expiry…)"
+                    value={coinData}
+                    onChange={(e) => setCoinData(e.target.value)}
+                    className="min-h-[200px] bg-background/50"
                   />
                 </div>
-              </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="customPrompt">Custom Prompt</Label>
+                  <Input
+                    id="customPrompt"
+                    value={customPrompt}
+                    onChange={(e) => setCustomPrompt(e.target.value)}
+                    className="bg-background/50"
+                  />
+                </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="price">Current Price ($)</Label>
-                  <Input
-                    id="price"
-                    type="number"
-                    value={marketData.currentPrice}
-                    onChange={(e) => setMarketData(prev => ({ ...prev, currentPrice: Number(e.target.value) }))}
-                  />
+                <div className="flex gap-3">
+                  <Button 
+                    onClick={handleSubmit}
+                    disabled={isLoading}
+                    className="flex-1"
+                  >
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Analyzing...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="mr-2 h-4 w-4" />
+                        Submit
+                      </>
+                    )}
+                  </Button>
+                  
+                  <Button 
+                    variant="secondary"
+                    onClick={exportToExcel}
+                    disabled={results.length === 0}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Export Excel
+                  </Button>
                 </div>
-                <div>
-                  <Label htmlFor="vwap">VWAP ($)</Label>
-                  <Input
-                    id="vwap"
-                    type="number"
-                    value={marketData.vwap}
-                    onChange={(e) => setMarketData(prev => ({ ...prev, vwap: Number(e.target.value) }))}
-                  />
-                </div>
-              </div>
+              </CardContent>
+            </Card>
+          </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="atr">ATR ($)</Label>
-                  <Input
-                    id="atr"
-                    type="number"
-                    value={marketData.atr}
-                    onChange={(e) => setMarketData(prev => ({ ...prev, atr: Number(e.target.value) }))}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="rsi">RSI</Label>
-                  <Input
-                    id="rsi"
-                    type="number"
-                    value={marketData.rsi}
-                    onChange={(e) => setMarketData(prev => ({ ...prev, rsi: Number(e.target.value) }))}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="volume">Volume Trend</Label>
-                <Select value={marketData.volumeTrend} onValueChange={(value) => 
-                  setMarketData(prev => ({ ...prev, volumeTrend: value }))
-                }>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="increasing">Increasing</SelectItem>
-                    <SelectItem value="decreasing">Decreasing</SelectItem>
-                    <SelectItem value="stable">Stable</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* User Settings */}
-          <Card className="border-border/50 shadow-lg">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <DollarSign className="h-5 w-5 text-primary" />
-                Trading Parameters
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="cash">Cash Available ($)</Label>
-                  <Input
-                    id="cash"
-                    type="number"
-                    value={userSettings.cashAvailable}
-                    onChange={(e) => setUserSettings(prev => ({ ...prev, cashAvailable: Number(e.target.value) }))}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="target">Target PnL ($)</Label>
-                  <Input
-                    id="target"
-                    type="number"
-                    value={userSettings.targetPnL}
-                    onChange={(e) => setUserSettings(prev => ({ ...prev, targetPnL: Number(e.target.value) }))}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="leverage">Max Leverage</Label>
-                  <Input
-                    id="leverage"
-                    type="number"
-                    value={userSettings.maxLeverage}
-                    onChange={(e) => setUserSettings(prev => ({ ...prev, maxLeverage: Number(e.target.value) }))}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="contract">Contract Size</Label>
-                  <Input
-                    id="contract"
-                    type="number"
-                    value={userSettings.contractSize}
-                    onChange={(e) => setUserSettings(prev => ({ ...prev, contractSize: Number(e.target.value) }))}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="risk">Risk Preference</Label>
-                  <Select value={userSettings.riskPreference} onValueChange={(value) => 
-                    setUserSettings(prev => ({ ...prev, riskPreference: value }))
-                  }>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="tight">Tight</SelectItem>
-                      <SelectItem value="balanced">Balanced</SelectItem>
-                      <SelectItem value="wide">Wide</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="margin">Margin Constraint (%)</Label>
-                  <Input
-                    id="margin"
-                    type="number"
-                    value={userSettings.marginConstraint}
-                    onChange={(e) => setUserSettings(prev => ({ ...prev, marginConstraint: Number(e.target.value) }))}
-                  />
-                </div>
-              </div>
-
-              <Button 
-                onClick={calculateTradeGrids} 
-                className="w-full bg-primary hover:bg-primary/90"
-              >
-                <Calculator className="mr-2 h-4 w-4" />
-                Calculate Trade Grid
-              </Button>
-            </CardContent>
-          </Card>
+          {/* Right Column - Results */}
+          <div className="space-y-6">
+            <Card className="bg-card/50 backdrop-blur-sm border-primary/20">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-5 w-5 text-primary" />
+                  Trade Recommendations
+                  {results.length > 0 && (
+                    <Badge variant="default" className="ml-auto">
+                      {results.length} trades
+                    </Badge>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {results.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <BarChart3 className="mx-auto h-12 w-12 mb-4 opacity-50" />
+                    <p>Submit coin data to see trading recommendations</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead 
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={() => handleSort('coin')}
+                          >
+                            Coin {sortColumn === 'coin' && (sortDirection === 'asc' ? '↑' : '↓')}
+                          </TableHead>
+                          <TableHead 
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={() => handleSort('strategy')}
+                          >
+                            Strategy {sortColumn === 'strategy' && (sortDirection === 'asc' ? '↑' : '↓')}
+                          </TableHead>
+                          <TableHead 
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={() => handleSort('entry_price')}
+                          >
+                            Entry {sortColumn === 'entry_price' && (sortDirection === 'asc' ? '↑' : '↓')}
+                          </TableHead>
+                          <TableHead 
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={() => handleSort('max_profit')}
+                          >
+                            Max Profit {sortColumn === 'max_profit' && (sortDirection === 'asc' ? '↑' : '↓')}
+                          </TableHead>
+                          <TableHead 
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={() => handleSort('confidence')}
+                          >
+                            Confidence {sortColumn === 'confidence' && (sortDirection === 'asc' ? '↑' : '↓')}
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {sortedResults.map((result, index) => (
+                          <TableRow key={index} className="hover:bg-muted/50">
+                            <TableCell className="font-medium">{result.coin}</TableCell>
+                            <TableCell>
+                              <Badge variant={result.strategy.includes('L') ? "default" : "secondary"}>
+                                {result.strategy}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>${result.entry_price.toLocaleString()}</TableCell>
+                            <TableCell className="text-green-500 font-medium">
+                              {formatCurrency(result.max_profit)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge 
+                                variant={
+                                  result.confidence === 'High' ? 'default' : 
+                                  result.confidence === 'Medium' ? 'secondary' : 
+                                  'outline'
+                                }
+                              >
+                                {result.confidence}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    
+                    {/* Detailed View */}
+                    <div className="mt-6 space-y-4">
+                      <h4 className="font-medium text-sm text-muted-foreground">Trade Details</h4>
+                      {sortedResults.map((result, index) => (
+                        <div key={index} className="p-4 rounded-lg bg-muted/30 space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="font-medium">{result.coin} - {result.strategy}</span>
+                            <Badge variant="outline">{result.confidence}</Badge>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                              <span className="text-muted-foreground">Entry: </span>
+                              <span className="font-medium">${result.entry_price.toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Target: </span>
+                              <span className="font-medium text-green-500">${result.target_price.toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Stop Loss: </span>
+                              <span className="font-medium text-red-500">${result.stop_loss.toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Contracts: </span>
+                              <span className="font-medium">{result.contracts}</span>
+                            </div>
+                          </div>
+                          <p className="text-sm text-muted-foreground mt-2">{result.reason}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
-
-        {/* Results Table */}
-        {tradeGrids.length > 0 && (
-          <Card className="border-border/50 shadow-lg">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Target className="h-5 w-5 text-primary" />
-                Trade Grid Results
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b border-border">
-                      <th className="text-left p-3 font-medium">Strategy</th>
-                      <th className="text-left p-3 font-medium">Entry ($)</th>
-                      <th className="text-left p-3 font-medium">TP ($)</th>
-                      <th className="text-left p-3 font-medium">SL ($)</th>
-                      <th className="text-left p-3 font-medium">Contracts</th>
-                      <th className="text-left p-3 font-medium">Max Profit</th>
-                      <th className="text-left p-3 font-medium">Max Loss</th>
-                      <th className="text-left p-3 font-medium">Margin</th>
-                      <th className="text-left p-3 font-medium">Leverage</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tradeGrids.map((grid, index) => (
-                      <tr key={index} className="border-b border-border/50 hover:bg-muted/30">
-                        <td className="p-3">
-                          <Badge variant={grid.strategy.includes('L') ? 'default' : 'destructive'}>
-                            {grid.strategy.includes('L') ? (
-                              <TrendingUp className="mr-1 h-3 w-3" />
-                            ) : (
-                              <TrendingDown className="mr-1 h-3 w-3" />
-                            )}
-                            {grid.strategy}
-                          </Badge>
-                        </td>
-                        <td className="p-3 font-mono">{grid.entryPrice.toFixed(2)}</td>
-                        <td className="p-3 font-mono text-trading-long">{grid.takeProfit.toFixed(2)}</td>
-                        <td className="p-3 font-mono text-trading-short">{grid.stopLoss.toFixed(2)}</td>
-                        <td className="p-3">{grid.contracts}</td>
-                        <td className="p-3 text-trading-long font-medium">${grid.maxProfit.toFixed(0)}</td>
-                        <td className="p-3 text-trading-short font-medium">-${grid.maxLoss.toFixed(0)}</td>
-                        <td className="p-3">${grid.marginRequired.toFixed(0)}</td>
-                        <td className="p-3">{grid.leverage.toFixed(1)}x</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-                <Card className="bg-muted/30 border-border/50">
-                  <CardContent className="p-4">
-                    <div className="text-sm text-muted-foreground">Total Margin Required</div>
-                    <div className="text-2xl font-bold">
-                      ${tradeGrids.reduce((sum, grid) => sum + grid.marginRequired, 0).toFixed(0)}
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="bg-muted/30 border-border/50">
-                  <CardContent className="p-4">
-                    <div className="text-sm text-muted-foreground">Potential Profit</div>
-                    <div className="text-2xl font-bold text-trading-long">
-                      ${tradeGrids.reduce((sum, grid) => sum + grid.maxProfit, 0).toFixed(0)}
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="bg-muted/30 border-border/50">
-                  <CardContent className="p-4">
-                    <div className="text-sm text-muted-foreground">Total Risk</div>
-                    <div className="text-2xl font-bold text-trading-short">
-                      -${tradeGrids.reduce((sum, grid) => sum + grid.maxLoss, 0).toFixed(0)}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </CardContent>
-          </Card>
-        )}
       </div>
     </div>
   );
